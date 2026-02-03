@@ -31,4 +31,4 @@ RUN npx prisma generate --no-hints
 
 EXPOSE 3000
 
-ENTRYPOINT ["/app/entrypoint.prod.sh"]
+ENTRYPOINT ["sh", "/app/entrypoint.prod.sh"]
