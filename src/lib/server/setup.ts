@@ -1,4 +1,4 @@
-import { Client, escapeLiteral } from 'pg'
+﻿import { Client, escapeLiteral } from 'pg'
 import { exec } from 'child_process'
 import { promisify } from 'util'
 import { config } from 'dotenv'
@@ -37,13 +37,42 @@ export const devWarning = dev
 `
   : ''
 
+function parseDatabaseUrl(connectionString?: string) {
+  if (!connectionString) return null
+  try {
+    const parsed = new URL(connectionString)
+    const database = parsed.pathname.replace(/^\//, '')
+    return {
+      username: decodeURIComponent(parsed.username),
+      host: parsed.hostname,
+      database: database || 'eml_admintool'
+    }
+  } catch {
+    return null
+  }
+}
+
+function isManagedDatabase(connectionString?: string) {
+  if (!connectionString) return false
+  if (connectionString === defaultPgURL) return true
+  const info = parseDatabaseUrl(connectionString)
+  if (!info) return false
+  return info.host === 'dbs' || info.username === 'eml'
+}
+
 export async function changeDatabasePassword(newPassword: string) {
   console.log('\n---------- CHANGING DATABASE PASSWORD ----------\n')
   resetProcessEnv()
 
   newPassword = newPassword.replace(/"\/\\+&#%?=:@/g, '')
 
-  const client = new Client({ connectionString: process.env.DATABASE_URL })
+  const databaseUrl = process.env.DATABASE_URL ?? defaultPgURL
+  if (!isManagedDatabase(databaseUrl)) {
+    console.log('External database detected, skipping password rotation.')
+    return
+  }
+
+  const client = new Client({ connectionString: databaseUrl })
   await client.connect()
 
   try {
@@ -64,25 +93,32 @@ export async function initDatabase() {
   console.log('\n------------ INITIALIZING DATABASE -------------\n')
   resetProcessEnv()
 
-  const client = new Client({ connectionString: process.env.DATABASE_URL })
+  const databaseUrl = process.env.DATABASE_URL ?? defaultPgURL
+  const dbInfo = parseDatabaseUrl(databaseUrl)
+  const dbName = dbInfo?.database ?? 'eml_admintool'
+  const managedDb = isManagedDatabase(databaseUrl)
+
+  const client = new Client({ connectionString: databaseUrl })
   await client.connect()
 
   let res
-  try {
-    res = await client.query(`SELECT 1 FROM "pg_database" WHERE "datname" = $1`, ['eml_admintool'])
-  } catch (err) {
-    console.error('Error checking database existence:', err)
-    await client.end()
-    throw new ServerError('Database check failed', err, NotificationCode.DATABASE_ERROR, 500)
-  }
-
-  if (res.rowCount === 0) {
+  if (managedDb) {
     try {
-      await client.query(`CREATE DATABASE "eml_admintool"`)
+      res = await client.query(`SELECT 1 FROM "pg_database" WHERE "datname" = $1`, [dbName])
     } catch (err) {
-      console.error('Error creating database:', err)
+      console.error('Error checking database existence:', err)
       await client.end()
-      throw new ServerError('Database creation failed', err, NotificationCode.DATABASE_ERROR, 500)
+      throw new ServerError('Database check failed', err, NotificationCode.DATABASE_ERROR, 500)
+    }
+
+    if (res.rowCount === 0) {
+      try {
+        await client.query(`CREATE DATABASE "${dbName}"`)
+      } catch (err) {
+        console.error('Error creating database:', err)
+        await client.end()
+        throw new ServerError('Database creation failed', err, NotificationCode.DATABASE_ERROR, 500)
+      }
     }
   }
 
@@ -305,6 +341,8 @@ BODY_SIZE_LIMIT=Infinity
 
   resetProcessEnv()
 }
+
+
 
 
 
